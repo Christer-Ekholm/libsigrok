@@ -81,6 +81,9 @@ extern SR_PRIV struct sr_dev_driver gmc_mh_2x_bd232_driver_info;
 #ifdef HAVE_HW_HAMEG_HMO
 extern SR_PRIV struct sr_dev_driver hameg_hmo_driver_info;
 #endif
+#ifdef HAVE_HW_HANTEK_6XXX
+extern SR_PRIV struct sr_dev_driver hantek_6xxx_driver_info;
+#endif
 #ifdef HAVE_HW_HANTEK_DSO
 extern SR_PRIV struct sr_dev_driver hantek_dso_driver_info;
 #endif
@@ -235,6 +238,9 @@ SR_PRIV struct sr_dev_driver **drivers_lists[] = {
 #endif
 #ifdef HAVE_HW_HAMEG_HMO
 	(DRVS) {&hameg_hmo_driver_info, NULL},
+#endif
+#ifdef HAVE_HW_HANTEK_6XXX
+	(DRVS) {&hantek_6xxx_driver_info, NULL},
 #endif
 #ifdef HAVE_HW_HANTEK_DSO
 	(DRVS) {&hantek_dso_driver_info, NULL},
