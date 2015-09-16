@@ -60,7 +60,7 @@
 
 #define VDIV_MULTIPLIER 10
 
-#define FLUSH_PACKET_SIZE 2100
+#define FLUSH_PACKET_SIZE 2600 // Wierd flushing needed for filtering glitch away
 #define MAX_PACKET_SIZE   (10 * 1024 * 1024)
 #define MIN_PACKET_SIZE   600
 

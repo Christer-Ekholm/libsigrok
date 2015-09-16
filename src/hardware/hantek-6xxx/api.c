@@ -799,6 +799,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 	devc->samp_received = 0;
 	devc->aq_started    = g_get_monotonic_time();
 	devc->dev_state     = FLUSH;
+	//devc->dev_state     = CAPTURE;
 
 	usb_source_add(sdi->session, drvc->sr_ctx, TICK, handle_event, (void *)sdi);
 

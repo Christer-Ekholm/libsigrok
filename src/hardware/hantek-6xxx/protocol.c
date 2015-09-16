@@ -130,13 +130,13 @@ SR_PRIV int hantek_6xxx_get_channeldata(const struct sr_dev_inst *sdi,
 
 	usb = sdi->conn;
 
-	if (!(buf = g_try_malloc(MAX_PACKET_SIZE))) {
+	if (!(buf = g_try_malloc(data_amount))) {
 		sr_err("Failed to malloc USB endpoint buffer.");
 		return SR_ERR_MALLOC;
 	}
 	transfer = libusb_alloc_transfer(0);
 	libusb_fill_bulk_transfer(transfer, usb->devhdl, HANTEK_EP_IN, buf,
-			data_amount, cb, (void *)sdi, 400);
+			data_amount, cb, (void *)sdi, 4000);
 	if ((ret = libusb_submit_transfer(transfer)) != 0) {
 		sr_err("Failed to submit transfer: %s.",
 			   libusb_error_name(ret));
