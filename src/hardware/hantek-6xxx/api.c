@@ -1,7 +1,7 @@
 /*
  * This file is part of the libsigrok project.
  *
- * Copyright (C) 2015 Chriter <christerekholm@gmail.com>
+ * Copyright (C) 2015 Christer Ekholm <christerekholm@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,11 +34,10 @@
 #include "libsigrok-internal.h"
 #include "protocol.h"
 
-
+#define dev_print(...) sr_spew( __VA_ARGS__ )
 
 /* Max time in ms before we want to check on USB events */
-/* TODO tune this properly */
-#define TICK 10
+#define TICK 200
 
 static const uint32_t scanopts[] = {
 	SR_CONF_CONN,
@@ -49,7 +48,6 @@ static const uint32_t drvopts[] = {
 };
 
 static const uint32_t devopts[] = {
-	SR_CONF_CONTINUOUS,
 	SR_CONF_CONN             | SR_CONF_GET,
 	SR_CONF_SAMPLERATE       | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_NUM_VDIV         | SR_CONF_GET,
@@ -66,13 +64,14 @@ static const char *channel_names[] = {
 	"CH1", "CH2",
 };
 
+STATIC_VERIFY(ARRAY_SIZE(channel_names) == NUMBER_OF_CHANNELS, channel_names);
+
 static const struct hantek_6xxx_profile dev_profiles[] = {
 	{
 		0x04b4, 0x6022, 0x04b5, 0x6022,
 		"Hantek", "6022be",
 		FIRMWARE_DIR "/hantek-6022be.fw"
-	},
-	{ 0, 0, 0, 0, 0, 0, 0 },
+	}
 };
 
 
@@ -86,6 +85,8 @@ static const uint64_t vdivs[][2] = {
 };
 
 SR_PRIV struct sr_dev_driver hantek_6xxx_driver_info;
+
+static int readChannel(const struct sr_dev_inst *sdi, uint32_t amount);
 
 static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data);
 
@@ -104,10 +105,7 @@ static struct sr_dev_inst *hantek_6xxx_dev_new(const struct hantek_6xxx_profile 
 	sdi->model  = g_strdup(prof->model);
 	sdi->driver = &hantek_6xxx_driver_info;
 
-	/*
-	 * Add only the real channels -- EXT isn't a source of data, only
-	 * a trigger source internal to the device.
-	 */
+
 	for (i = 0; i < ARRAY_SIZE(channel_names); i++) {
 		ch = sr_channel_new(sdi, i, SR_CHANNEL_ANALOG, TRUE, channel_names[i]);
 		cg = g_malloc0(sizeof(struct sr_channel_group));
@@ -118,13 +116,19 @@ static struct sr_dev_inst *hantek_6xxx_dev_new(const struct hantek_6xxx_profile 
 
 	devc = g_malloc0(sizeof(struct dev_context));
 
+	for(i = 0; i < NUMBER_OF_CHANNELS; i++)
+	{
+		devc->ch_enabled[i] = TRUE;
+		devc->voltage[i]    = DEFAULT_VOLTAGE;
+	}
+
+	devc->sample_buf       = NULL;
+	devc->sample_buf_write = 0;
+	devc->sample_buf_size  = 0;
+
 	devc->profile       = prof;
 	devc->dev_state     = IDLE;
 	devc->samplerate    = DEFAULT_SAMPLERATE;
-	devc->ch_enabled[0] = TRUE;
-	devc->ch_enabled[1] = TRUE;
-	devc->voltage[0]    = DEFAULT_VOLTAGE;
-	devc->voltage[1]    = DEFAULT_VOLTAGE;
 
 	sdi->priv           = devc;
 	drvc                = sdi->driver->context;
@@ -140,32 +144,20 @@ static int configure_channels(const struct sr_dev_inst *sdi)
 	const GSList *l;
 	int p;
 	struct sr_channel *ch;
-	struct sr_channel *chans[2];
 	devc = sdi->priv;
 
 	g_slist_free(devc->enabled_channels);
 	devc->enabled_channels = NULL;
-	devc->ch_enabled[0] = devc->ch_enabled[1] = FALSE;
+	memset(devc->ch_enabled, 0, sizeof(devc->ch_enabled));
+
 	for (l = sdi->channels, p = 0; l; l = l->next, p++) {
 		ch = l->data;
 
-		if(p <= 1)
+		if( p < NUMBER_OF_CHANNELS)
 		{
-			devc->ch_enabled[p] = ch->enabled;
-			chans[p] = ch;
+			devc->ch_enabled[p]    = ch->enabled;
+			devc->enabled_channels = g_slist_append(devc->enabled_channels, ch);
 		}
-	}
-
-	if(devc->ch_enabled[1])
-	{
-		devc->ch_enabled[0] = 1; // Enable CH1 if CH2 is used.
-		devc->enabled_channels = g_slist_append(devc->enabled_channels, chans[0]);
-		devc->enabled_channels = g_slist_append(devc->enabled_channels, chans[1]);
-	}
-	else
-	{
-		devc->ch_enabled[0] = 1; // Enable CH1 allways
-		devc->enabled_channels = g_slist_append(devc->enabled_channels, chans[0]);
 	}
 
 	return SR_OK;
@@ -248,7 +240,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		usb_get_port_path(devlist[i], connection_id, sizeof(connection_id));
 
 		prof = NULL;
-		for (j = 0; dev_profiles[j].orig_vid; j++) {
+		for (j = 0; j < (int)ARRAY_SIZE(dev_profiles); j++) {
 			if (des.idVendor == dev_profiles[j].orig_vid
 				&& des.idProduct == dev_profiles[j].orig_pid) {
 				/* Device matches the pre-firmware profile. */
@@ -562,18 +554,9 @@ static uint32_t data_amount(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
 
-	uint32_t data_amount  = MAX_PACKET_SIZE;
+	uint32_t data_amount;
 
-	int channels = devc->ch_enabled[1] ? 2 : 1;
-
-	data_amount = MIN(devc->samplerate * 2 * channels, MAX_PACKET_SIZE); // Max 2 seconds
-
-	if(devc->limit_samples)
-	{
-		uint32_t data_left = (devc->limit_samples - devc->samp_received) * channels;
-
-		data_amount = MIN(data_left, data_amount);
-	}
+	int channels = NUMBER_OF_CHANNELS;
 
 	if(devc->limit_msec)
 	{
@@ -581,10 +564,20 @@ static uint32_t data_amount(const struct sr_dev_inst *sdi)
 
 		uint32_t data_left = devc->samplerate * time_left * channels / 1000;
 
-		data_amount = MIN(data_left, data_amount);
+		data_amount = data_left;
+	}
+	else if(devc->limit_samples)
+	{
+		uint32_t data_left = (devc->limit_samples - devc->samp_received) * channels;
+
+		data_amount = data_left;
+	}
+	else
+	{
+		data_amount = devc->samplerate * channels;
 	}
 
-	data_amount = MAX(data_amount, MIN_PACKET_SIZE); // Driver does not handle to small buffers
+	data_amount += MIN_PACKET_SIZE; // Driver does not handle small buffers
 
 	sr_spew("data_amount %d", data_amount);
 
@@ -597,22 +590,33 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 {
 	struct sr_datafeed_packet packet;
 	struct sr_datafeed_analog analog;
-	struct dev_context *devc;
-	float ch, range;
+	struct dev_context *devc = sdi->priv;
+
 	int num_channels, data_offset, i;
 
-	devc = sdi->priv;
-	num_channels = (devc->ch_enabled[0] && devc->ch_enabled[1]) ? 2 : 1;
+	#define RANGE(ch) (((float)vdivs[devc->voltage[ch]][0] / vdivs[devc->voltage[ch]][1]) * VDIV_MULTIPLIER)
+
+	const float ch1_bit    = RANGE(0) / 255;
+	const float ch2_bit    = RANGE(1) / 255;
+	const float ch1_center = RANGE(0) / 2;
+	const float ch2_center = RANGE(1) / 2;
+
+	#undef RANGE
+
+	const gboolean ch1_ena = !!devc->ch_enabled[0];
+	const gboolean ch2_ena = !!devc->ch_enabled[1];
+
+	num_channels = ( ch1_ena && ch2_ena ) ? 2 : 1;
 	packet.type = SR_DF_ANALOG;
 	packet.payload = &analog;
 
 	analog.channels = devc->enabled_channels;
-	analog.num_samples = num_samples;
+	analog.num_samples = num_samples  * num_channels;
 	analog.mq = SR_MQ_VOLTAGE;
 	analog.unit = SR_UNIT_VOLT;
 	analog.mqflags = 0;
 
-	analog.data = g_try_malloc(analog.num_samples * sizeof(float) * num_channels);
+	analog.data = g_try_malloc(analog.num_samples * sizeof(float));
 
 	if(!analog.data)
 	{
@@ -622,7 +626,7 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 	}
 
 	data_offset = 0;
-	for (i = 0; i < analog.num_samples; i++) {
+	for (i = 0; i < num_samples; i++) {
 		/*
 		 * The device always sends data for both channels. If a channel
 		 * is disabled, it contains a copy of the enabled channel's
@@ -635,24 +639,37 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 		 * and 255 = +2.5V.
 		 */
 
-		if (devc->ch_enabled[0]) {
-
-			range = ((float)vdivs[devc->voltage[0]][0] / vdivs[devc->voltage[0]][1]) * VDIV_MULTIPLIER;
-			ch = range / 255 * *(buf + i * 2);
-			/* Value is centered around 0V. */
-			ch -= range / 2;
-			analog.data[data_offset++] = ch;
+		if (ch1_ena) {
+			analog.data[data_offset++] = (ch1_bit * *(buf + i * 2) - ch1_center) * 100;
 		}
-		if (devc->ch_enabled[1]) {
-			range = ((float)vdivs[devc->voltage[1]][0] / vdivs[devc->voltage[1]][1]) * VDIV_MULTIPLIER;
-			ch = range / 255 * *(buf + i * 2 + 1);
-			ch -= range / 2;
-			analog.data[data_offset++] = ch;
+		if (ch2_ena) {
+			analog.data[data_offset++] = (ch2_bit * *(buf + i * 2 + 1) - ch2_center) * 100;
 		}
 	}
 	sr_session_send(devc->cb_data, &packet);
 	g_free(analog.data);
 }
+
+
+static void send_data(struct sr_dev_inst *sdi, struct libusb_transfer * buf[], uint64_t samples)
+{
+	int i = 0;
+	uint64_t send = 0;
+
+	while(send < samples)
+	{
+		uint32_t chunk = MIN(samples-send, (uint64_t)(buf[i]->actual_length / NUMBER_OF_CHANNELS));
+		send += chunk;
+		send_chunk(sdi, buf[i]->buffer, chunk);
+
+		/* Everything in this transfer was either copied to the buffer or
+		* sent to the session bus. */
+		g_free(buf[i]->buffer);
+		libusb_free_transfer(buf[i]);
+		i++;
+	}
+}
+
 
 /*
  * Called by libusb (as triggered by handle_event()) when a transfer comes in.
@@ -664,15 +681,15 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 {
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
-	uint32_t num_samples;
 
 	sdi = transfer->user_data;
 	devc = sdi->priv;
 
-
 	if(devc->dev_state == FLUSH)
 	{
-		devc->dev_state = NEW_CAPTURE;
+		devc->dev_state = CAPTURE;
+		readChannel(sdi, data_amount(sdi));
+		devc->aq_started    = g_get_monotonic_time();
 		return;
 	}
 
@@ -681,45 +698,70 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 		return;
 	}
 
-	sr_spew("receive_transfer(): status %d received %d bytes.",
+	if(!devc->sample_buf)
+	{
+		devc->sample_buf_size  = 10;
+		devc->sample_buf       = g_try_malloc(devc->sample_buf_size * sizeof(transfer));
+		devc->sample_buf_write = 0;
+	}
+
+	if(devc->sample_buf_write >= devc->sample_buf_size)
+	{
+		devc->sample_buf_size += 10;
+		devc->sample_buf       = g_try_realloc(devc->sample_buf, devc->sample_buf_size * sizeof(transfer));
+
+		if(!devc->sample_buf)
+		{
+			sr_err("Unable to allock sample memory");
+			devc->dev_state = STOPPING;
+			return;
+		}
+	}
+
+	devc->sample_buf[devc->sample_buf_write++]  = transfer;
+	devc->samp_received                        += transfer->actual_length / NUMBER_OF_CHANNELS;
+
+	sr_spew("receive_transfer(): calculated samplerate == %" PRIu64 "ks/s",
+		(uint64_t)transfer->actual_length * 1000 / (g_get_monotonic_time() - devc->read_start_ts + 1) / NUMBER_OF_CHANNELS );
+
+	dev_print("receive_transfer(): status %d received %d bytes.",
 		   transfer->status, transfer->actual_length);
 
 	if (transfer->actual_length == 0)
 		/* Nothing to send to the bus. */
 		return;
 
-	num_samples = transfer->actual_length / 2;
-
-	if(devc->limit_samples)
-	{
-		num_samples = MIN(devc->limit_samples - devc->samp_received, num_samples);
-	}
-
-	devc->samp_received += num_samples;
-
-	// I have feeling that this should be done separate thread because Hantek 6022 is data streamer and cannot handle delays
-	send_chunk(sdi, transfer->buffer, num_samples);
-
-	/* Everything in this transfer was either copied to the buffer or
-	 * sent to the session bus. */
-	g_free(transfer->buffer);
-	libusb_free_transfer(transfer);
-
-	devc->dev_state = NEW_CAPTURE;
-
 	if(devc->limit_samples && devc->samp_received >= devc->limit_samples)
 	{
-		sr_info("Requested number of samples reached, stopping. %" PRIu64 " <= %" PRIu64 , devc->limit_samples, devc->samp_received );
+		sr_info("Requested number of samples reached, stopping. %" PRIu64 " <= %" PRIu64 , devc->limit_samples, devc->samp_received);
+		send_data(sdi, devc->sample_buf, devc->limit_samples);
 		sdi->driver->dev_acquisition_stop(sdi, NULL);
 	}
-
-
-	if(devc->limit_msec && (g_get_monotonic_time() - devc->aq_started) / 1000 >= devc->limit_msec )
+	else if(devc->limit_msec && (g_get_monotonic_time() - devc->aq_started) / 1000 >= devc->limit_msec )
 	{
 		sr_info("Requested time limit reached, stopping. %d <= %d" , (uint32_t)devc->limit_msec, (uint32_t)(g_get_monotonic_time() - devc->aq_started) / 1000 );
+		send_data(sdi, devc->sample_buf, devc->samp_received);
+		g_free(devc->sample_buf); devc->sample_buf = NULL;
 		sdi->driver->dev_acquisition_stop(sdi, NULL);
 	}
+	else
+	{
+		readChannel(sdi, data_amount(sdi));
+	}
+}
 
+static int readChannel(const struct sr_dev_inst *sdi, uint32_t amount)
+{
+	struct dev_context *devc = sdi->priv;
+
+	amount = MIN(amount, MAX_PACKET_SIZE);
+
+	int ret = hantek_6xxx_get_channeldata(sdi, receive_transfer, amount);
+
+	devc->read_start_ts    = g_get_monotonic_time();
+	devc->read_data_amount = amount;
+
+	return ret;
 }
 
 static int handle_event(int fd, int revents, void *cb_data)
@@ -763,13 +805,6 @@ static int handle_event(int fd, int revents, void *cb_data)
 		return TRUE;
 	}
 
-	if (devc->dev_state == NEW_CAPTURE)
-	{
-		sr_dbg("New capture request");
-		hantek_6xxx_get_channeldata(sdi, receive_transfer, data_amount(sdi));
-		devc->dev_state = CAPTURE;
-	}
-
 	return TRUE;
 }
 
@@ -797,15 +832,13 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi, void *cb_data)
 	std_session_send_df_header(cb_data, LOG_PREFIX);
 
 	devc->samp_received = 0;
-	devc->aq_started    = g_get_monotonic_time();
 	devc->dev_state     = FLUSH;
-	//devc->dev_state     = CAPTURE;
 
 	usb_source_add(sdi->session, drvc->sr_ctx, TICK, handle_event, (void *)sdi);
 
 	hantek_6xxx_start_data_collecting(sdi);
 
-	hantek_6xxx_get_channeldata(sdi, receive_transfer, FLUSH_PACKET_SIZE);
+	readChannel(sdi, FLUSH_PACKET_SIZE);
 
 	return SR_OK;
 }
@@ -821,6 +854,8 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 
 	devc = sdi->priv;
 	devc->dev_state = STOPPING;
+
+	g_free(devc->sample_buf); devc->sample_buf = NULL;
 
 	return SR_OK;
 }

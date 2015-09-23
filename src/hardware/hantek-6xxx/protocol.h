@@ -1,7 +1,7 @@
 /*
  * This file is part of the libsigrok project.
  *
- * Copyright (C) 2015 Chriter <christerekholm@gmail.com>
+ * Copyright (C) 2015 Christer Ekholm <christerekholm@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,12 +27,15 @@
 
 #define LOG_PREFIX "hantek-6xxx"
 
+#define STATIC_VERIFY(a,name) extern char __STATIC_VERIFY_FAIL_##name[(a) ? 1 : -1]
+
 /* FX2 renumeration delay in ms */
 #define MAX_RENUM_DELAY_MS      3000
 
 #define DEFAULT_VOLTAGE           2
 #define DEFAULT_SAMPLERATE        SR_MHZ(8)
 
+#define NUMBER_OF_CHANNELS        2
 
 #define SAMPLERATE_VALUES \
 	SR_MHZ(48), SR_MHZ(30),  SR_MHZ(24),  \
@@ -44,7 +47,7 @@
 	48, 30, 24,  \
 	16,  8,  4,  \
 	 1, 50, 20,  \
-    10,
+	10,
 
 #define VDIV_VALUES \
 	{ 100,  1000 },  \
@@ -60,9 +63,9 @@
 
 #define VDIV_MULTIPLIER 10
 
-#define FLUSH_PACKET_SIZE 2600 // Wierd flushing needed for filtering glitch away
-#define MAX_PACKET_SIZE   (10 * 1024 * 1024)
+#define FLUSH_PACKET_SIZE 2600 // Weird flushing needed for filtering glitch away
 #define MIN_PACKET_SIZE   600
+#define MAX_PACKET_SIZE   (12 * 1024 * 1024)
 
 
 typedef enum control_requests
@@ -81,7 +84,6 @@ typedef enum control_requests
 
 enum states {
 	IDLE,
-	NEW_CAPTURE,
 	FLUSH,
 	CAPTURE,
 	STOPPING,
@@ -113,9 +115,16 @@ struct dev_context {
 	uint64_t samp_received;
 	uint64_t aq_started;
 
+	uint64_t read_start_ts;
+	uint32_t read_data_amount;
+
+	struct libusb_transfer ** sample_buf;
+	uint32_t  sample_buf_write;
+	uint32_t  sample_buf_size;
+
 	/* Oscilloscope settings. */
-	gboolean    ch_enabled[2];
-	int         voltage[2];
+	gboolean    ch_enabled[NUMBER_OF_CHANNELS];
+	int         voltage[NUMBER_OF_CHANNELS];
 	uint64_t    samplerate;
 
 	uint64_t    limit_msec;

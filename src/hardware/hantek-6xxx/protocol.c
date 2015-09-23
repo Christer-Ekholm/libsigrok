@@ -1,7 +1,7 @@
 /*
  * This file is part of the libsigrok project.
  *
- * Copyright (C) 2015 Chriter <christerekholm@gmail.com>
+ * Copyright (C) 2015 Christer Ekholm <christerekholm@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -250,7 +250,7 @@ SR_PRIV int hantek_6xxx_init(const struct sr_dev_inst *sdi)
 
 	hantek_6xxx_update_samplerate(sdi);
 	hantek_6xxx_update_vdiv(sdi);
-	hantek_6xxx_update_channels(sdi);
+	//hantek_6xxx_update_channels(sdi); // only 2 channel mode supported
 
 	return SR_OK;
 }
