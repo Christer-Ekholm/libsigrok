@@ -611,12 +611,12 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 	packet.payload = &analog;
 
 	analog.channels = devc->enabled_channels;
-	analog.num_samples = num_samples  * num_channels;
+	analog.num_samples = num_samples;
 	analog.mq = SR_MQ_VOLTAGE;
 	analog.unit = SR_UNIT_VOLT;
 	analog.mqflags = 0;
 
-	analog.data = g_try_malloc(analog.num_samples * sizeof(float));
+	analog.data = g_try_malloc(analog.num_samples * sizeof(float) * num_channels);
 
 	if(!analog.data)
 	{
