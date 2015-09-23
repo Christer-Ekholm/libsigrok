@@ -640,10 +640,10 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 		 */
 
 		if (ch1_ena) {
-			analog.data[data_offset++] = (ch1_bit * *(buf + i * 2) - ch1_center) * 100;
+			analog.data[data_offset++] = (ch1_bit * *(buf + i * 2) - ch1_center);
 		}
 		if (ch2_ena) {
-			analog.data[data_offset++] = (ch2_bit * *(buf + i * 2 + 1) - ch2_center) * 100;
+			analog.data[data_offset++] = (ch2_bit * *(buf + i * 2 + 1) - ch2_center);
 		}
 	}
 	sr_session_send(devc->cb_data, &packet);
