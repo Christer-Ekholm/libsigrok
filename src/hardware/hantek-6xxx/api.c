@@ -554,34 +554,30 @@ static uint32_t data_amount(const struct sr_dev_inst *sdi)
 {
 	struct dev_context *devc = sdi->priv;
 
-	uint32_t data_amount;
+	uint32_t data_left;
 
 	int channels = NUMBER_OF_CHANNELS;
 
 	if(devc->limit_msec)
 	{
-		uint32_t time_left = devc->limit_msec - (g_get_monotonic_time() - devc->aq_started) / 1000;
+		int32_t time_left = devc->limit_msec - (g_get_monotonic_time() - devc->aq_started) / 1000;
 
-		uint32_t data_left = devc->samplerate * time_left * channels / 1000;
-
-		data_amount = data_left;
+		data_left = devc->samplerate * MAX(time_left, 0) * channels / 1000;
 	}
 	else if(devc->limit_samples)
 	{
-		uint32_t data_left = (devc->limit_samples - devc->samp_received) * channels;
-
-		data_amount = data_left;
+		data_left = (devc->limit_samples - devc->samp_received) * channels;
 	}
 	else
 	{
-		data_amount = devc->samplerate * channels;
+		data_left = devc->samplerate * channels;
 	}
 
-	data_amount += MIN_PACKET_SIZE; // Driver does not handle small buffers
+	data_left += MIN_PACKET_SIZE; // Driver does not handle small buffers
 
-	sr_spew("data_amount %d", data_amount);
+	sr_spew("data_amount %u", data_left);
 
-	return data_amount;
+	return data_left;
 }
 
 
@@ -688,8 +684,8 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 	if(devc->dev_state == FLUSH)
 	{
 		devc->dev_state = CAPTURE;
+		devc->aq_started = g_get_monotonic_time();
 		readChannel(sdi, data_amount(sdi));
-		devc->aq_started    = g_get_monotonic_time();
 		return;
 	}
 
